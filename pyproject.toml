@@ -57,6 +57,7 @@ processing = [
     "tokenizers",
     "ftfy",
     "fasteners",
+    "transformers",
     "xxhash",
     "kenlm",
     "pyahocorasick"
