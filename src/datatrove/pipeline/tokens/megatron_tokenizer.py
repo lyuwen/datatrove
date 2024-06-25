@@ -15,7 +15,7 @@ from tokenizers import Encoding, Tokenizer
 from datatrove.data import Document, DocumentsPipeline
 from datatrove.io import DataFolder, DataFolderLike, get_datafolder
 from datatrove.utils.tokenization import PipelineStepWithTokenizer, batched
-from datatrove.utils.indexed_dataset import _IndexWriter, DType
+from datatrove.utils.indexed_dataset import _IndexWriter, _IndexReader, DType
 
 
 SHUFFLING_READ_BLOCK_SIZE = 50000  # read 50kb at a time only (~mean + 2sigmas for final filtered common crawl docs)
@@ -68,22 +68,22 @@ class TokenizerTypes(StrEnum):
 def load_tokenizer(model: str | Callable, vocab: str | None=None, type: str | TokenizerTypes=TokenizerTypes.HuggingFace) -> TokenizerKind:
     """ Load various type of tokenizers.
     """
-      logger.info(f"Using tokenizer: {type!s}.")
-      if type == TokenizerTypes.HuggingFace:
-          return AutoTokenizer.from_pretrained(model)
-      elif type == TokenizerTypes.TikToken:
-          if vocab is not None and (os.path.isdir(model) or model.endswith(".py")):
-              return import_tokenizer_class(model)(vocab)
-          else:
-              raise NotImplementedError
-      elif type == TokenizerTypes.Tokenizer:
-          if os.path.exists(name_or_path):
-              return Tokenizer.from_file(name_or_path)
-          return Tokenizer.from_pretrained(name_or_path)
-      elif callable(model):
-          return model()
-      else:
-          raise TypeError("Unable to load tokenizer.")
+    logger.info(f"Using tokenizer: {type!s}.")
+    if type == TokenizerTypes.HuggingFace:
+        return AutoTokenizer.from_pretrained(model)
+    elif type == TokenizerTypes.TikToken:
+        if vocab is not None and (os.path.isdir(model) or model.endswith(".py")):
+            return import_tokenizer_class(model)(vocab)
+        else:
+            raise NotImplementedError
+    elif type == TokenizerTypes.Tokenizer:
+        if os.path.exists(name_or_path):
+            return Tokenizer.from_file(name_or_path)
+        return Tokenizer.from_pretrained(name_or_path)
+    elif callable(model):
+        return model()
+    else:
+        raise TypeError("Unable to load tokenizer.")
 
 
 def encode_batch(tokenizer: TokenizerKind, batched_data, num_process: Optional[int]=8) -> list[list[int]]:
@@ -112,6 +112,21 @@ def write_index(index_file, dtype, doc_ends, doc_indices: list[int] | None = Non
             document_indices = np.array(doc_indices, dtype=int).tolist()
         document_indices.append(len(document_indices))
         writer.write(sequence_lengths, None, document_indices)
+
+
+def read_index(index_file):
+    """ Read sequence and document indices from Megatron compatible index files.
+    """
+    return _IndexReader(index_file, False)
+
+
+def load_doc_ends_indices(index_file):
+    """Load doc_ends and doc_indices from idx file."""
+    index_file = read_index(index_file)
+    # doc_end = sequence start + sequence length
+    doc_ends = index_file.sequence_pointers // index_file.dtype_size + index_file.sequence_lengths
+    doc_indices = index_file.document_indices.copy()
+    return doc_ends, doc_indices
 
 
 class TokenizedFile:
@@ -176,6 +191,10 @@ class TokenizedFile:
 
         if self.save_final_metadata:
             self.write_final_metadata()
+
+    def load_doc_ends(self):
+        """Load doc_ends and doc_indices from idx file."""
+        self.doc_ends, self.doc_indices = load_doc_ends_indices(self.output_folder._join(self.filename.replace(self.suffix, ".idx")))
 
     def cleanup(self):
         """Remove the files and the index."""
@@ -333,7 +352,7 @@ class MegatronTokenizer(PipelineStepWithTokenizer):
             Example: 20 * 2**20 (20MB)
     """
 
-    name = "✍️ Writer"
+    name = "✍️ Megatron Writer"
     type = "🔢 - TOKENIZER"
 
     def __init__(
