@@ -1,4 +1,4 @@
-import tqdm
+from tqdm import tqdm
 import struct
 import logging
 from enum import Enum, StrEnum
@@ -271,7 +271,7 @@ class TokenizedFile:
             logger.info(f"Shuffling in {destination}...")
             # shuffle doc_id
             total_tokens_written = 0
-            for doc_id in ordering:
+            for doc_id in tqdm(ordering, desc=f"Shuffling documents", unit="documents"):
                 # get start and end from the boundaries
                 start, end = self.doc_ends[doc_id - 1] if doc_id > 0 else 0, self.doc_ends[doc_id]
                 # copy the bytes. each token is token_size bytes
@@ -321,6 +321,11 @@ class TokenizedFile:
                     ]
                 )
             )
+        with self.output_folder.open(f"{filename}.datalist", "wt") as f:
+            if token_count == -1:
+                token_count = self.write_idx
+            prefix = self.output_folder._join(self.filename).replace(self.suffix, "")
+            f.write(f"{token_count:<12d} {prefix}")
 
 
 def get_output_filename(save_filename, rank: int, name: str, sub_rank: int = None, suffix: str=".npy"):
@@ -439,7 +444,38 @@ class MegatronTokenizer(PipelineStepWithTokenizer):
         )
         inc = Incrementer(rank, world_size)
         # tokenize document's text in batches to go faster
-        for batch in tqdm.tqdm(batched(data, self.batch_size), unit="batch"):
+        for batch in tqdm(batched(data, self.batch_size), desc="Writing unshuffled documents", unit="batches"):
+            with self.track_time(unit="batch"):
+                encoded_batch: list[Encoding] = encode_batch(self.tokenizer, [document.text for document in batch])
+                for document, tokens in zip(batch, encoded_batch):
+                    # write bytes to disk
+                    unshuff.write(tokens, inc.next())
+                    # save stats
+                    self.stat_update("tokens", value=len(tokens))
+        unshuff.close()
+        return unshuff
+
+    def write_unshuffled(self, data: DocumentsPipeline, filename: str, rank: int = 0, world_size: int = 1):
+        """Tokenize documents with the tokenizer in batches and write the unshuffled tokenized documents to a file.
+
+        Args:
+            data (DocumentsPipeline): the documents to process
+            filename (str): the filename to use for the output file
+        """
+        from tokenizers import Encoding
+
+        unshuff = TokenizedFile(
+            self.output_folder if not self.shuffle or not self.local_working_dir else self.local_working_dir,
+            filename,
+            save_index=not self.shuffle,
+            upload_block_size=self.upload_block_size,
+            tokenizer_name_or_path=self.tokenizer_name_or_path,
+            save_final_metadata=self.save_final_metadata,
+            token_size=self.token_size,
+        )
+        inc = Incrementer(rank, world_size)
+        # tokenize document's text in batches to go faster
+        for batch in tqdm(batched(data, self.batch_size), desc="Writing unshuffled documents", unit="batches"):
             with self.track_time(unit="batch"):
                 encoded_batch: list[Encoding] = encode_batch(self.tokenizer, [document.text for document in batch])
                 for document, tokens in zip(batch, encoded_batch):
