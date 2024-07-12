@@ -12,9 +12,10 @@ from numpy.random import default_rng
 from transformers import AutoTokenizer, PreTrainedTokenizerFast, PreTrainedTokenizer
 from tokenizers import Encoding, Tokenizer
 
+from datatrove.utils.batching import batched
 from datatrove.data import Document, DocumentsPipeline
 from datatrove.io import DataFolder, DataFolderLike, get_datafolder
-from datatrove.utils.tokenization import PipelineStepWithTokenizer, batched
+from datatrove.utils.tokenization import PipelineStepWithTokenizer
 from datatrove.utils.indexed_dataset import _IndexWriter, _IndexReader, DType
 
 
