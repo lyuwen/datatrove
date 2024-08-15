@@ -41,6 +41,7 @@ class ZstdCompressor(PipelineStep):
         self.output_folder = get_datafolder(output_folder)
         self.recursive = recursive
         self.glob_pattern = glob_pattern
+        self.files_to_process = self.input_folder.list_files(recursive=self.recursive, glob_pattern=self.glob_pattern)
         self.progress = progress
         self.remove = remove
         self.nthreads = nthreads
@@ -62,11 +63,12 @@ class ZstdCompressor(PipelineStep):
             world_size: int
                 The total number of processes
         """
-        files_shard = self.plan_folder.get_shard(rank, world_size, recursive=self.recursive, glob_pattern=self.glob_pattern)
-        with tqdm(total=len(files_shard), desc="File progress", unit="file", disable=not self.file_progress) as file_pbar:
+        files_shard = self.files_to_process[rank::world_size]
+        with tqdm(total=len(files_shard), desc="File progress", unit="file", disable=not self.progress) as file_pbar:
             for file in files_shard:
-                rm = "--rm" if self.remove else ""
-                cmd = f"{self.zstd_bin} -T{self.nthreads} {rm} {file}"
+                cmd = f"{self.zstd_bin} -T{self.nthreads} {self.input_folder._join(file)}"
                 logger.info(f"Compress file {file} with command \"{cmd}\"")
-                subprocess.check_output(cmd)
+                subprocess.check_output(cmd.split())
+                if self.remove:
+                    self.input_folder.rm_file(file)
                 file_pbar.update()
