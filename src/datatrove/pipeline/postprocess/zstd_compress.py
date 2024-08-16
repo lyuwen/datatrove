@@ -4,7 +4,7 @@ from tqdm import tqdm
 from loguru import logger
 
 from datatrove.data import DocumentsPipeline
-from datatrove.io import DataFolderLike, get_datafolder
+from datatrove.io import DataFileLike, DataFolderLike, get_datafolder
 from datatrove.pipeline.base import PipelineStep
 
 
@@ -13,7 +13,7 @@ class ZstdCompressor(PipelineStep):
 
     Args:
         input_folder (DataFolderLike): the input folder containing the tokenized documents
-        output_folder (DataFolderLike): the output folder where to save the merged tokenized documents
+        file_paths (DataFileLike): the files to process
         recursive (bool): whether to search files recursively. Ignored if paths_file is provided
         glob_pattern (bool): pattern that all files must match exactly to be included (relative to data_folder). Ignored if paths_file is provided
         progress (bool): show progress bar for documents
@@ -27,8 +27,9 @@ class ZstdCompressor(PipelineStep):
 
     def __init__(
         self,
-        input_folder: DataFolderLike,
-        output_folder: DataFolderLike,
+        input_folder: DataFolderLike | None = None,
+        *,
+        file_paths: DataFileLike | None = None,
         recursive: bool = True,
         glob_pattern: str | None = None,
         progress: bool = True,
@@ -37,11 +38,14 @@ class ZstdCompressor(PipelineStep):
         zstd_bin: str | None = None,
     ):
         super().__init__()
-        self.input_folder = get_datafolder(input_folder)
-        self.output_folder = get_datafolder(output_folder)
-        self.recursive = recursive
-        self.glob_pattern = glob_pattern
-        self.files_to_process = self.input_folder.list_files(recursive=self.recursive, glob_pattern=self.glob_pattern)
+        if file_paths is not None:
+            if input_folder:
+              input_folder = get_datafolder(input_folder)
+              file_paths = input_folder._join(file_paths)
+            self.files_to_process = file_paths
+        else:
+            input_folder = get_datafolder(input_folder)
+            self.files_to_process = input_folder._join(input_folder.list_files(recursive=recursive, glob_pattern=glob_pattern))
         self.progress = progress
         self.remove = remove
         self.nthreads = nthreads
@@ -66,7 +70,7 @@ class ZstdCompressor(PipelineStep):
         files_shard = self.files_to_process[rank::world_size]
         with tqdm(total=len(files_shard), desc="File progress", unit="file", disable=not self.progress) as file_pbar:
             for file in files_shard:
-                cmd = f"{self.zstd_bin} -T{self.nthreads} {self.input_folder._join(file)}"
+                cmd = f"{self.zstd_bin} -T{self.nthreads} {file}"
                 logger.info(f"Compress file {file} with command \"{cmd}\"")
                 subprocess.check_output(cmd.split())
                 if self.remove:
