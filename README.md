@@ -12,6 +12,7 @@ Local, remote and other file systems are supported through [fsspec](https://file
 
 - [Installation](#installation)
 - [Quickstart examples](#quickstart-examples)
+- [Terminology](#terminology)
 - [Pipeline](#pipeline)
   * [DataTrove Document](#datatrove-document)
   * [Types of pipeline blocks](#types-of-pipeline-blocks)
@@ -51,11 +52,32 @@ Available flavours (combine them with `,` i.e. `[processing,s3]`):
 
 ## Quickstart examples
 You can check the following [examples](examples):
+- [fineweb.py](examples/fineweb.py) full reproduction of the [FineWeb dataset](https://huggingface.co/datasets/HuggingFaceFW/fineweb)
 - [process_common_crawl_dump.py](examples/process_common_crawl_dump.py) full pipeline to read commoncrawl warc files, extract their text content, filters and save the resulting data to s3. Runs on slurm
 - [tokenize_c4.py](examples/tokenize_c4.py) reads data directly from huggingface's hub to tokenize the english portion of the C4 dataset using the `gpt2` tokenizer
 - [minhash_deduplication.py](examples/minhash_deduplication.py) full pipeline to run minhash deduplication of text data
 - [sentence_deduplication.py](examples/sentence_deduplication.py) example to run sentence level exact deduplication
 - [exact_substrings.py](examples/exact_substrings.py) example to run ExactSubstr (requires [this repo](https://github.com/google-research/deduplicate-text-datasets))
+
+## Terminology
+- `pipeline`: a list of processing steps to execute (read data, filter, write to disk, etc)
+- `executor`: runs a specific pipeline on a given execution environment (slurm, multi cpu machine, etc)
+- `job`: the execution of a pipeline on a given executor
+- `task`: a `job` is comprised of multiple `tasks`, and these are used to parallelize execution, usually by having each `task` process a `shard` of data. Datatrove keeps track of which tasks have completed and when you relaunch only incomplete tasks will run.
+- `file`: an individual input file (.json, .csv, etc).
+> [!TIP]
+> Note that each file will be processed by a single `task`. Datatrove does not automatically split a file into multiple parts, so to fully parallelize you should have multiple medium sized files rather than a single large file)
+- `shard`: a group of input data (usually a group of `file`s), which will be assigned to a specific `task`. Each `task` will process a different non overlapping `shard` of data, from the full list of input files
+- `worker`: compute resource that will execute a single task at a time, e.g., if you have 50 cpu cores you can run a LocalPipelineExecutor with `workers=50`, to execute 50 `tasks` simultaneously (one per cpu). Once a `worker` is done with a `task`, it will start processing another waiting `task`
+
+> [!TIP]
+> Your number of `tasks` controls how much you can parallelize and also how much time each individual processing unit will take. If you have a small number of tasks (and they each therefore have to process a large number of files) and they fail, you will have to restart from scratch, whereas if you have a larger number of small tasks each failed task will take way less time to rerun.
+
+> [!CAUTION]
+> If your `tasks` > `files`, some tasks will not process any data, so there usually isn't a point in setting `tasks` to a number larger than `files.
+
+### Example 
+Running a `job` to process **10000** `files`, on a machine with **100** cpu cores (`workers`). If we choose to use **1000** tasks, each one will process a `shard` of 10 files. `workers=100` means that we can process **100** tasks at a time.
 
 ## Pipeline
 ### DataTrove Document
@@ -93,6 +115,7 @@ pipeline = [
 
 ## Executors
 Pipelines are platform-agnostic, which means that the same pipeline can smoothly run on different execution environments without any changes to its steps. Each environment has its own PipelineExecutor.
+
 Some options common to all executors:
 - `pipeline` a list consisting of the pipeline steps that should be run
 - `logging_dir` a datafolder where log files, statistics and more should be saved. Do not reuse folders for different pipelines/jobs as this will overwrite your stats, logs and completions.
@@ -266,7 +289,7 @@ Some options common to most readers:
 You can use [extractors](src/datatrove/pipeline/extractors) to extract text content from raw html. The most commonly used extractor in datatrove is [Trafilatura](src/datatrove/pipeline/extractors/trafilatura.py), which uses the [trafilatura](https://trafilatura.readthedocs.io/en/latest/) library.
 
 ### Filtering data
-[Filters](src/datatrove/pipeline/filters) are some of the most important blocks of any data processing pipeline. Datatrove's filter blocks take a `Document` and return a boolean (`True` to keep a document, `False` to remove it). Removed samples do not continue to the next pipeline stage. You can also save the removed samples to disk by passing a [Writer](src/datatrove/pipeline/writers) to the `excluded_writer` parameter.
+[Filters](src/datatrove/pipeline/filters) are some of the most important blocks of any data processing pipeline. Datatrove's filter blocks take a `Document` and return a boolean (`True` to keep a document, `False` to remove it). Removed samples do not continue to the next pipeline stage. You can also save the removed samples to disk by passing a [Writer](src/datatrove/pipeline/writers) to the `exclusion_writer` parameter.
 
 ### Saving data
 Once you are done processing your data you will probably want to save it somewhere. For this you can use a [writer](src/datatrove/pipeline/writers/jsonl.py).
@@ -309,15 +332,15 @@ stats["cnn.com"].mean
 ```
 
 Following stats are available:
-- `contamination_stats.py`: `word_contamination_{words[0]}: Frequency of words contamination in the document.
+- `contamination_stats.py`: `word_contamination_{words[0]}`: Frequency of words contamination in the document.
 - `doc_stats.py`: `length`: Length of the document, `white_space_ratio`: Ratio of whitespace characters, `non_alpha_digit_ratio`: Ratio of non-alphabetic and non-digit characters, `digit_ratio`: Ratio of digits, `uppercase_ratio`: Ratio of uppercase letters, `elipsis_ratio`: Ratio of elipsis characters, `punctuation_ratio`: Punctuation ratio
-- `lang_stats.py`: `fasttext_{language}`: Language of the document using fastText
-- `line_stats.py`: `n_lines`: Number of lines per doc, `avg_line_length`: Average length of line per doc, `long_line_ratio_words`: Ratio of lines with more than k chars, `short_line_ratio_chars`: Ratio of lines with more than k chars, `bullet_point_lines_ratio`: Ratio of bullet points, `line_duplicates`: Ratio of lines that are duplicates, `line_char_duplicates`: Ratio of chars in duplicated lines
-- `paragraph_stats.py`: `n_paragraphs`: Number of paragraphs, `avg_paragraph_length`: Average paragraph length, `short_paragraph_ratio_{chars}`: Ratio of short paragraphs (<{chars} chars), `long_paragraph_ratio_{chars}`: Ratio of long paragraphs (>{chars} chars)
-- `perplexity_stats.py`: `ccnet_perplexity_{model_dataset}_{language}`: Perplexity of the document using the CCNet model for {model} on {dataset} in {language}
-- `sentence_stats.py`: `n_sentences`: Number of sentences, `avg_sentence_length`: Average sentence length, `short_sentence_ratio_{chars}`: Ratio of short sentences (<{chars} chars), `long_sentence_ratio_{chars}`: Ratio of long sentences (>{chars} chars)
+- `lang_stats.py`: `fasttext_{language}`: Score of document being written in `language`. Score is computed using FastText model.
+- `line_stats.py`: `n_lines`: Number of lines per doc, `avg_line_length`: Average length of line per doc, `long_line_ratio_chars_{chars}`: Ratio of lines with more than k chars, `short_line_ratio_chars_{chars}`: Ratio of lines with less than k chars, `bullet_point_lines_ratio`: Ratio of line starting with bullet point, `line_duplicates`: Ratio of lines that are duplicates, `line_char_duplicates`: Ratio of chars in duplicated lines to all chars.
+- `paragraph_stats.py`: `n_paragraphs`: Number of paragraphs, `avg_paragraph_length`: Average paragraph length, `short_paragraph_ratio_{chars}`: Ratio of short paragraphs (`<{chars}` chars), `long_paragraph_ratio_{chars}`: Ratio of long paragraphs (`>{chars}` chars)
+- `perplexity_stats.py`: `ccnet_perplexity_{model_dataset}_{language}`: Perplexity of the document using the CCNet model for `{model}` on `{dataset}` in `{language}`
+- `sentence_stats.py`: `n_sentences`: Number of sentences, `avg_sentence_length`: Average sentence length, `short_sentence_ratio_{chars}`: Ratio of short sentences (`<{chars}` chars), `long_sentence_ratio_{chars}`: Ratio of long sentences (`>{chars}` chars)
 - `token_stats.py`:`token_count`: Number of tokens in the document
-- `word_stats.py`: `n_words`: Number of words in the document, `avg_word_length`: Average length of words in the document, `avg_words_per_line`: Average number of words per line in the document, `short_word_ratio_{chars}`: Ratio of words shorter than {chars} characters, `stop_word_ratio`: Ratio of stop words, `long_word_ratio_{chars}`: Ratio of words longer than {chars} characters, `type_token_ratio`: Number of unique words / Number of tokens, `capitalized_word_ratio`: Ratio of capitalized words, `uppercase_word_ratio`: Ratio of uppercase words
+- `word_stats.py`: `n_words`: Number of words in the document, `avg_word_length`: Average length of words in the document, `avg_words_per_line`: Average number of words per line in the document, `short_word_ratio_{chars}`: Ratio of words shorter than `{chars}` characters, `stop_word_ratio`: Ratio of stop words, `long_word_ratio_{chars}`: Ratio of words longer than `{chars}` characters, `type_token_ratio`: Number of unique words / Number of tokens, `capitalized_word_ratio`: Ratio of capitalized words, `uppercase_word_ratio`: Ratio of uppercase words
 
 
 

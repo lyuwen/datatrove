@@ -6,6 +6,7 @@ from fsspec import AbstractFileSystem
 from fsspec import open as fsspec_open
 from fsspec.callbacks import NoOpCallback, TqdmCallback
 from fsspec.core import get_fs_token_paths, strip_protocol, url_to_fs
+from fsspec.implementations.cached import CachingFileSystem
 from fsspec.implementations.dirfs import DirFileSystem
 from fsspec.implementations.local import LocalFileSystem
 from huggingface_hub import HfFileSystem, cached_assets_path
@@ -127,7 +128,10 @@ class DataFolder(DirFileSystem):
         Get a list of files on this directory. If `subdirectory` is given will search in `path/subdirectory`. If
         glob_pattern is given, it will only return files that match the pattern, which can be used to match a given
         extension, for example `*.myext`. Be careful with subdirectories when using glob (use ** if you want to match
-        any subpath). Args: subdirectory: str:  (Default value = "") recursive: bool:  (Default value = True)
+        any subpath).
+
+        Args: subdirectory: str:  (Default value = "")
+        recursive: bool:  (Default value = True)
         glob_pattern: str | None:  (Default value = None)
 
         Returns: a list of file paths, relative to `self.path`
@@ -137,9 +141,9 @@ class DataFolder(DirFileSystem):
             # makes it slightly easier for file extensions
             glob_pattern = f"*{glob_pattern}"
         extra_options = {}
-        if isinstance(self.fs, HfFileSystem):
+        if isinstance(_get_true_fs(self.fs), HfFileSystem):
             extra_options["expand_info"] = False  # speed up
-        if include_directories:
+        if include_directories and not glob_pattern:
             extra_options["withdirs"] = True
         return sorted(
             [
@@ -374,3 +378,11 @@ def get_shard_from_paths_file(paths_file: DataFileLike, rank: int, world_size):
         for pathi, path in enumerate(f):
             if (pathi - rank) % world_size == 0:
                 yield path.strip()
+
+
+def _get_true_fs(fs: AbstractFileSystem):
+    if isinstance(fs, CachingFileSystem):
+        # We have to unwrap the cached filesystem to get the real fs
+        return fs.fs
+
+    return fs

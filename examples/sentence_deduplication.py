@@ -41,7 +41,7 @@ def run_example():
         WarcReader(data_folder="warc/", limit=1000),
         Trafilatura(),
         GopherQualityFilter(min_stop_words=0),
-        LanguageFilter(language_threshold=0.5, languages=(Languages.english,)),
+        LanguageFilter(language_threshold=0.5, languages=[Languages.english]),
         JsonlWriter("intermediate/"),
         SentenceDedupSignature(output_folder="c4/sigs", config=sent_dedup_config, finder_workers=FINDER_WORKERS),
     ]
@@ -51,6 +51,7 @@ def run_example():
     pipeline_3 = [
         JsonlReader(data_folder="intermediate/"),
         SentenceDedupFilter(data_folder="c4/dups", config=sent_dedup_config),
+        JsonlWriter("c4/final_output"),  # save the final filtered output to disk
     ]
 
     executor_1: PipelineExecutor = LocalPipelineExecutor(pipeline=pipeline_1, workers=4, tasks=4)
