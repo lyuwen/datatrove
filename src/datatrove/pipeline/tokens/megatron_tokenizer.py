@@ -193,9 +193,9 @@ class TokenizedFile:
                 self.doc_ends,
                 doc_indices=self.doc_indices,
                 )
-          if self.save_doc_meta and self.doc_meta:
-              df = pd.DataFrame(self.doc_meta)
-              df.to_json(self.get_doc_meta_file(), lines=True)
+        if self.save_doc_meta and self.doc_meta:
+            df = pd.DataFrame(self.doc_meta)
+            df.to_json(self.get_doc_meta_file(), lines=True)
 
         if self.save_final_metadata:
             self.write_final_metadata()
