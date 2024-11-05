@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import humanize
 import numpy as np
+import pandas as pd
 from loguru import logger
 from numpy.random import default_rng
 from transformers import AutoTokenizer, PreTrainedTokenizerFast, PreTrainedTokenizer
@@ -149,6 +150,7 @@ class TokenizedFile:
         output_folder: DataFolderLike,
         filename: str,
         save_index: bool = True,
+        save_doc_meta: bool = True,
         upload_block_size: int | None = None,
         tokenizer_name_or_path: str | None = None,
         save_final_metadata: bool = False,
@@ -158,12 +160,14 @@ class TokenizedFile:
         self.output_folder = get_datafolder(output_folder)
         self.filename = filename
         self.save_index = save_index
+        self.save_doc_meta = save_doc_meta
         self.upload_block_size = upload_block_size
         self.write_idx = 0
         self.token_size = token_size
         self.token_format = "I" if self.token_size == 4 else "H"
         self.doc_ends = []
         self.doc_indices = []
+        self.doc_meta = []
         self.tokenizer_name_or_path = tokenizer_name_or_path
         self.save_final_metadata = save_final_metadata
 
@@ -184,18 +188,30 @@ class TokenizedFile:
         # save index: document boundaries
         if self.save_index:
             write_index(
-                self.output_folder._join(self.filename.replace(self.suffix, ".idx")),
+                self.get_idx_file(),
                 self.token_dtype,
                 self.doc_ends,
                 doc_indices=self.doc_indices,
                 )
+          if self.save_doc_meta and self.doc_meta:
+              df = pd.DataFrame(self.doc_meta)
+              df.to_json(self.get_doc_meta_file(), lines=True)
 
         if self.save_final_metadata:
             self.write_final_metadata()
 
+    def get_idx_file(self):
+      return self.output_folder._join(self.filename.replace(self.suffix, ".idx"))
+
+    def get_doc_meta_file(self):
+      return self.output_folder._join(self.filename.replace(self.suffix, ".docmeta.jsonl.gz"))
+
     def load_doc_ends(self):
         """Load doc_ends and doc_indices from idx file."""
-        self.doc_ends, self.doc_indices = load_doc_ends_indices(self.output_folder._join(self.filename.replace(self.suffix, ".idx")))
+        self.doc_ends, self.doc_indices = load_doc_ends_indices(self.get_idx_file())
+
+    def load_doc_meta(self):
+        self.doc_meta = pd.read_json(self.get_doc_meta_file(), lines=True)
 
     def cleanup(self):
         """Remove the files and the index."""
@@ -225,7 +241,7 @@ class TokenizedFile:
             # save each document's boundary
             self.doc_ends.append(self.write_idx)
 
-    def write(self, tokens: list[int], index: int):
+    def write(self, tokens: list[int], index: int, doc_meta: dict = None):
         """Write tokens to the files.
 
         Args:
@@ -234,6 +250,8 @@ class TokenizedFile:
         # get the bytes
         self.write_bytes(struct.pack(f"<%s{self.token_format}" % len(tokens), *tokens))
         self.doc_indices.append(index) 
+        if self.doc_meta is not None:
+            self.doc_meta.append(doc_meta)
 
     def copy(
         self,
@@ -278,6 +296,10 @@ class TokenizedFile:
                 # copy the bytes. each token is token_size bytes
                 tokens_file.seek(start * self.token_size)
                 new_file.write_bytes(tokens_file.read((end - start) * self.token_size))
+                #
+                new_file.doc_indices.append(self.doc_indices[doc_id])
+                new_file.doc_meta.append(self.doc_meta[doc_id])
+                #
                 total_tokens_written += end - start
                 if max_tokens_per_file and total_tokens_written > max_tokens_per_file:
                     new_file.close()
@@ -293,7 +315,7 @@ class TokenizedFile:
                     )
                     logger.info(f"Shuffling in {destination}...")
                     total_tokens_written = 0
-            new_file.doc_indices = np.array(self.doc_indices)[ordering]
+            #  new_file.doc_indices = np.array(self.doc_indices)[ordering]
             new_file.close()
             return new_file
 
@@ -326,7 +348,7 @@ class TokenizedFile:
             if token_count == -1:
                 token_count = self.write_idx
             prefix = self.output_folder._join(self.filename).replace(self.suffix, "")
-            f.write(f"{token_count:<12d} {prefix}")
+            f.write(f"{token_count:<12d} {prefix}\n")
 
 
 def get_output_filename(save_filename, rank: int, name: str, sub_rank: int = None, suffix: str=".npy"):
@@ -424,7 +446,6 @@ class MegatronTokenizer(PipelineStepWithTokenizer):
                 )
         return self._tokenizer
 
-
     def write_unshuffled(self, data: DocumentsPipeline, filename: str, rank: int = 0, world_size: int = 1):
         """Tokenize documents with the tokenizer in batches and write the unshuffled tokenized documents to a file.
 
@@ -449,39 +470,13 @@ class MegatronTokenizer(PipelineStepWithTokenizer):
             with self.track_time(unit="batch"):
                 encoded_batch: list[Encoding] = encode_batch(self.tokenizer, [document.text for document in batch])
                 for document, tokens in zip(batch, encoded_batch):
+                    # save metadata for tracing purpose
+                    doc_meta = {
+                        "source_file": document.metadata["_source_file"],
+                        "id_in_file": document.metadata["_id_in_file"],
+                    }
                     # write bytes to disk
-                    unshuff.write(tokens, inc.next())
-                    # save stats
-                    self.stat_update("tokens", value=len(tokens))
-        unshuff.close()
-        return unshuff
-
-    def write_unshuffled(self, data: DocumentsPipeline, filename: str, rank: int = 0, world_size: int = 1):
-        """Tokenize documents with the tokenizer in batches and write the unshuffled tokenized documents to a file.
-
-        Args:
-            data (DocumentsPipeline): the documents to process
-            filename (str): the filename to use for the output file
-        """
-        from tokenizers import Encoding
-
-        unshuff = TokenizedFile(
-            self.output_folder if not self.shuffle or not self.local_working_dir else self.local_working_dir,
-            filename,
-            save_index=not self.shuffle,
-            upload_block_size=self.upload_block_size,
-            tokenizer_name_or_path=self.tokenizer_name_or_path,
-            save_final_metadata=self.save_final_metadata,
-            token_size=self.token_size,
-        )
-        inc = Incrementer(rank, world_size)
-        # tokenize document's text in batches to go faster
-        for batch in tqdm(batched(data, self.batch_size), desc="Writing unshuffled documents", unit="batches"):
-            with self.track_time(unit="batch"):
-                encoded_batch: list[Encoding] = encode_batch(self.tokenizer, [document.text for document in batch])
-                for document, tokens in zip(batch, encoded_batch):
-                    # write bytes to disk
-                    unshuff.write(tokens, inc.next())
+                    unshuff.write(tokens, inc.next(), doc_meta)
                     # save stats
                     self.stat_update("tokens", value=len(tokens))
         unshuff.close()
