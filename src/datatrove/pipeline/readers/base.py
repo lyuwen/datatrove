@@ -86,9 +86,10 @@ class BaseReader(PipelineStep):
                 )
             return None
         document = Document(**parsed_data)
-        doc_meta = {"_source_file": source_file, "_id_in_file": id_in_file}
         if self.default_metadata:
-            document.metadata = self.default_metadata | document.metadata | doc_meta
+            document.metadata = self.default_metadata | document.metadata
+        doc_meta = {"_source_file": source_file, "_id_in_file": id_in_file}
+        document.metadata =  doc_meta | self.metadata
         return document
 
     @abstractmethod
