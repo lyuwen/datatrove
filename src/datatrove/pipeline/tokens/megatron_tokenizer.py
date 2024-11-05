@@ -195,7 +195,7 @@ class TokenizedFile:
                 )
         if self.save_doc_meta and self.doc_meta:
             df = pd.DataFrame(self.doc_meta)
-            df.to_json(self.get_doc_meta_file(), lines=True)
+            df.to_json(self.get_doc_meta_file(), lines=True, orient='records')
 
         if self.save_final_metadata:
             self.write_final_metadata()
