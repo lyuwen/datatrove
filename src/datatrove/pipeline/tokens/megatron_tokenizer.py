@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Optional, NewType, Callable
 from concurrent.futures import ThreadPoolExecutor
 
 import humanize
+import subprocess
 import numpy as np
 import pandas as pd
 from loguru import logger
@@ -156,6 +157,8 @@ class TokenizedFile:
         save_final_metadata: bool = False,
         token_size: int = 4,
         suffix: str = ".npy"
+        compress: bool = False,
+        compression_cmd: str = None,
     ):
         self.output_folder = get_datafolder(output_folder)
         self.filename = filename
@@ -173,6 +176,8 @@ class TokenizedFile:
 
         self.suffix = suffix
         self.tokens_file = self.output_folder.open(self.filename, mode="wb", block_size=upload_block_size)
+        self.compress = compress
+        self.compression_cmd = compression_cmd if compression_cmd is not None else "gzip %s"
 
     @property
     def token_dtype(self):
@@ -185,6 +190,8 @@ class TokenizedFile:
         """Close the files and save the index."""
         if self.tokens_file:
             self.tokens_file.close()
+            if self.compress:
+              subprocess.check_call(self.compression_cmd % self.output_folder._join(self.filename), shell=True)
         # save index: document boundaries
         if self.save_index:
             write_index(
@@ -401,7 +408,9 @@ class MegatronTokenizer(PipelineStepWithTokenizer):
         upload_block_size: int | None = None,
         # you can set this if your s3 uploads are failing because of "Part
         # number must be an integer between 1 and 10000, inclusive". Example: 20 * 2**20 (20MB)
-        suffix: str = ".npy"
+        suffix: str = ".npy",
+        compress: bool = False,
+        compression_cmd: str = None,
     ):
         super().__init__()
         self.output_folder = get_datafolder(output_folder)
@@ -425,6 +434,8 @@ class MegatronTokenizer(PipelineStepWithTokenizer):
         self.max_tokens_per_file = max_tokens_per_file
         self.suffix = suffix
         self._token_size = token_size
+        self.compress = compress
+        self.compression_cmd = compression_cmd
 
     @property
     def token_dtype(self):
@@ -463,6 +474,8 @@ class MegatronTokenizer(PipelineStepWithTokenizer):
             tokenizer_name_or_path=self.tokenizer_name_or_path,
             save_final_metadata=self.save_final_metadata,
             token_size=self.token_size,
+            compress=self.compress,
+            compression_cmd=self.compression_cmd,
         )
         inc = Incrementer(rank, world_size)
         # tokenize document's text in batches to go faster
