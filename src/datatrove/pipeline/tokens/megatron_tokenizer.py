@@ -156,7 +156,7 @@ class TokenizedFile:
         tokenizer_name_or_path: str | None = None,
         save_final_metadata: bool = False,
         token_size: int = 4,
-        suffix: str = ".npy"
+        suffix: str = ".npy",
         compress: bool = False,
         compression_cmd: str = None,
     ):
