@@ -70,7 +70,7 @@ class ZstdCompressor(PipelineStep):
         files_shard = self.files_to_process[rank::world_size]
         with tqdm(total=len(files_shard), desc="File progress", unit="file", disable=not self.progress) as file_pbar:
             for file in files_shard:
-                cmd = f"{self.zstd_bin} -T{self.nthreads} {file}"
+                cmd = f"{self.zstd_bin} -v -T{self.nthreads} {file}"
                 logger.info(f"Compress file {file} with command \"{cmd}\"")
                 subprocess.check_output(cmd.split())
                 if self.remove:
