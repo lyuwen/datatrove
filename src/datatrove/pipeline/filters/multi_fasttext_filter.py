@@ -2,6 +2,7 @@ from collections import defaultdict
 from typing import Tuple
 
 import numpy as np
+from fasttext.FastText import _FastText
 
 from datatrove.data import Document
 from datatrove.io import cached_asset_path_or_download
@@ -59,7 +60,7 @@ class MultiFastTextClassifierFilter(BaseFilter):
         self._models = None
 
     @property
-    def model(self):
+    def models(self):
 
         def build_model(model_url, labels):
             model_file = cached_asset_path_or_download(
@@ -76,6 +77,7 @@ class MultiFastTextClassifierFilter(BaseFilter):
                     )
             return model
         if self._models is None:
+            self._models = dict()
             for name, model_url in self.model_urls.items():
                 self._models[name] = build_model(model_url, self.labels[name])
         return self._models
@@ -102,6 +104,7 @@ class MultiFastTextClassifierFilter(BaseFilter):
                     unit_scores.get(f"__label__{label}", -9e9) >= min_score for label, min_score in remove_labels
                 )
 
+        label_splits = {name: split_labels(self.labels[name]) for name in self.models}
         units = split_into_parts(doc.text, mode=self.filter_mode)
         kept_spans = []
         label_scores = {name: defaultdict(list) for name in self.models}
@@ -112,6 +115,7 @@ class MultiFastTextClassifierFilter(BaseFilter):
                 if self.save_labels_in_metadata:
                     for label, score in zip(labels, scores):
                         label_scores[name][label].append(score)
+                flags.append(check_label_scores(dict(zip(labels, scores)), label_splits[name][0], label_splits[name][1]))
             if any(flags):
                 kept_spans.append(unit)
                 self.stat_update("kept_span")
