@@ -1,6 +1,8 @@
 from tqdm import tqdm
 import struct
+import orjson
 import logging
+import smart_open
 from enum import Enum, StrEnum
 from typing import TYPE_CHECKING, Optional, NewType, Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -188,11 +190,16 @@ class TokenizedFile:
 
     def close(self):
         """Close the files and save the index."""
+
+        logger.info("Close tokens file.")
         if self.tokens_file:
             self.tokens_file.close()
             if self.compress:
+              logger.info("Compress tokens file.")
               subprocess.check_call(self.compression_cmd % self.output_folder._join(self.filename), shell=True)
+
         # save index: document boundaries
+        logger.info("Save idx file.")
         if self.save_index:
             write_index(
                 self.get_idx_file(),
@@ -200,12 +207,18 @@ class TokenizedFile:
                 self.doc_ends,
                 doc_indices=self.doc_indices,
                 )
-        if self.save_doc_meta and self.doc_meta:
-            df = pd.DataFrame(self.doc_meta)
-            df.to_json(self.get_doc_meta_file(), lines=True, orient='records')
 
+        logger.info("Save dataset metadata.")
         if self.save_final_metadata:
             self.write_final_metadata()
+
+        logger.info("Save per-document metadata.")
+        if self.save_doc_meta and self.doc_meta:
+            with smart_open.open(self.get_doc_meta_file(), "wt") as f:
+                for doc in self.doc_meta:
+                    f.write(orjson.dumps(doc, option=orjson.OPT_APPEND_NEWLINE))
+            #  df = pd.DataFrame(self.doc_meta)
+            #  df.to_json(self.get_doc_meta_file(), lines=True, orient='records')
 
     def get_idx_file(self):
       return self.output_folder._join(self.filename.replace(self.suffix, ".idx"))
