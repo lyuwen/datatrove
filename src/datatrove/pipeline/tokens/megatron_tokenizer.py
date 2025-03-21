@@ -216,7 +216,7 @@ class TokenizedFile:
         if self.save_doc_meta and self.doc_meta:
             with smart_open.open(self.get_doc_meta_file(), "wt") as f:
                 for doc in self.doc_meta:
-                    f.write(orjson.dumps(doc, option=orjson.OPT_APPEND_NEWLINE))
+                    f.write(orjson.dumps(doc, option=orjson.OPT_APPEND_NEWLINE).decode("utf-8"))
             #  df = pd.DataFrame(self.doc_meta)
             #  df.to_json(self.get_doc_meta_file(), lines=True, orient='records')
 
